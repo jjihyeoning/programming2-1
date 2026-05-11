@@ -31,7 +31,7 @@ export const Route = createFileRoute("/")({
   component: Index,
   head: () => ({
     meta: [
-      { title: "MultiVerify · 다중 LLM 코드 교차 검증" },
+      { title: "LLLLMM · 다중 LLM 코드 교차 검증" },
       {
         name: "description",
         content: "여러 LLM의 코드 응답을 교차 검증하고 성능을 측정해 최적의 코드를 추천합니다.",
@@ -269,17 +269,17 @@ function InputStage({
     <div className="mx-auto max-w-3xl pt-8">
       <div className="mb-8 text-center">
         <h2 className="text-4xl font-extrabold tracking-tight text-foreground md:text-5xl">
-          문제를 입력하면,
+          고급프로그래밍
           <br />
           <span
             className="bg-clip-text text-transparent"
             style={{ backgroundImage: "var(--gradient-primary)" }}
           >
-            최고의 코드를 찾아드립니다
+            LLLLMM
           </span>
         </h2>
         <p className="mt-4 text-base font-medium text-muted-foreground">
-          여러 LLM이 동시에 답하고, 서로 검증하고, 성능까지 측정합니다.
+          여러 LLM이 동시에 답하고, 서로 검증하고, 성능을 측정합니다.
         </p>
       </div>
 
@@ -332,7 +332,7 @@ function InputStage({
 
       <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {[
-          { icon: Code2, t: "다중 응답", d: "4개 LLM 동시 호출" },
+          { icon: Code2, t: "다중 응답", d: "3개 LLM 동시 호출" },
           { icon: Cpu, t: "성능 측정", d: "C++ 기반 실측" },
           { icon: Trophy, t: "최적 추천", d: "가중치 기반 점수화" },
         ].map((f) => (
