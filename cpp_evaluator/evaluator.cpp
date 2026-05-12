@@ -1,9 +1,11 @@
+//코드를 짜는 과정에서 llm의 도움을 받아 학습의 관점에서 주석을 많이 달았습니다.
 #include <windows.h> //코드 안에서 다른 프로그램을 실행하고 관리하기 위한 도구
-#include <psapi.h> //memory_score을 계산하기 위한 헤더
-#include <algorithm> //정렬과 최댓값 계산에 사용됨. 
-#include <chrono> //실행시간 측정에 사용됨. 
-#include <filesystem>
-#include <fstream> //csv결과 파일을 만들 때 사용됨. 
+#include <psapi.h> // memory_score을 계산하기 위한 헤더
+
+#include <algorithm> // 정렬과 최대값 계산에 사용됨.
+#include <chrono> // 실행시간 측정에 사용됨.
+#include <filesystem> 
+#include <fstream> // csv결과 파일을 만들 때 사용됨.
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -32,13 +34,16 @@ struct CandidateResult {
     long long executionTimeMs = 0;
     size_t peakMemoryKB = 0;
 
-    double timeScore = 0.0;
-    double memoryScore = 0.0;
-    double performanceScore = 0.0;
+    double semanticScore = 0.0;  // 2단계 Python AI 평가에서 채워질 값
+    double passRate = 0.0;       // 테스트케이스 기반 정답률 평가에서 채워질 값
+    double timeScore = 0.0;      // 3단계 C++ 실행 평가에서 계산 (이 코드에 나옴)
+    double memoryScore = 0.0;    // 3단계 C++ 실행 평가에서 계산 (이 코드에 나옴)
 
     string compileLog;
-}; //후보 코드의 평과 결과를 저장하는 구조체
+};  //후보 코드의 평과 결과를 저장하는 구조체
 
+
+//candidates 폴더 안에 있는 .cpp 후보 코드 파일들을 자동으로 찾는 함수
 vector<string> findCandidateFiles(const string& candidateDir) {
     vector<string> files;
 
@@ -57,6 +62,12 @@ vector<string> findCandidateFiles(const string& candidateDir) {
     return files;
 }
 
+/*
+    외부 명령어를 실행하는 함수
+
+    이 함수는 g++ 컴파일 명령어를 실행할 때 사용된다.
+    컴파일 결과 로그는 compile_temp_log.txt에 임시 저장한 뒤 문자열로 읽어온다.
+*/
 bool runCommandWithHiddenWindow(const string& command, string& logOutput, DWORD timeoutMs = 15000) {
     string tempLogFile = "compile_temp_log.txt";
     string fullCommand = "cmd.exe /C " + command + " > " + tempLogFile + " 2>&1";
@@ -85,10 +96,7 @@ bool runCommandWithHiddenWindow(const string& command, string& logOutput, DWORD 
         NULL,
         &si,
         &pi
-    ); /*C++ 기본 문법만으로는 외부 실행 파일의 메모리 사용량을 
-    직접 측정하기 어렵기 때문에,
-    Windows에서 제공하는 API를 활용해 실행 중인 프로세스의 메모리 정보를 
-    가져오도록 구현했다. */
+    );
 
     delete[] cmdLine;
 
@@ -124,11 +132,25 @@ bool runCommandWithHiddenWindow(const string& command, string& logOutput, DWORD 
     return exitCode == 0;
 }
 
+
+/* 후보 C++ 코드를 g++로 컴파일하는 함수
+sourcePath: candidates 폴더에 있는 원본 .cpp 파일 경로
+exePath: build 폴더에 생성될 .exe 파일 경로 */
+
 bool compileCandidate(const string& sourcePath, const string& exePath, string& compileLog) {
     string command = "g++ \"" + sourcePath + "\" -o \"" + exePath + "\" -std=c++17";
     return runCommandWithHiddenWindow(command, compileLog, 15000);
 }
 
+/*
+    컴파일된 실행 파일을 실행하고 시간과 메모리를 측정하는 함수
+
+    측정 항목:
+    - executionTimeMs: 실행 시간(ms)
+    - peakMemoryKB: 최대 메모리 사용량(KB)
+    - runSuccess: 정상 실행 여부
+    - timeout: 시간 초과 여부
+*/
 CandidateResult runExecutableAndMeasure(const string& exePath, CandidateResult result, DWORD timeoutMs = 5000) {
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -208,6 +230,11 @@ CandidateResult runExecutableAndMeasure(const string& exePath, CandidateResult r
     return result;
 }
 
+/*
+    실행 시간을 0~1 사이 점수로 변환하는 함수
+
+    시간이 짧을수록 높은 점수를 부여.
+*/
 double calculateTimeScore(long long timeMs) {
     if (timeMs <= 10) return 1.0;
     if (timeMs <= 50) return 0.9;
@@ -218,6 +245,11 @@ double calculateTimeScore(long long timeMs) {
     return 0.0;
 }
 
+/*
+    메모리 사용량을 0~1 사이 점수로 변환하는 함수
+
+    메모리를 적게 사용할수록 높은 점수를 부여.
+*/
 double calculateMemoryScore(size_t memoryKB) {
     if (memoryKB <= 1024) return 1.0;
     if (memoryKB <= 4096) return 0.9;
@@ -228,10 +260,19 @@ double calculateMemoryScore(size_t memoryKB) {
     return 0.0;
 }
 
-double calculatePerformanceScore(double timeScore, double memoryScore) {
-    return timeScore * 0.6 + memoryScore * 0.4;
-}
+/*
+    후보 코드 하나를 평가하는 함수 ****
 
+    이 함수는 다음 순서로 동작한다.
+    1. 후보 코드 파일명과 경로 설정
+    2. build 폴더 생성
+    3. g++로 컴파일
+    4. 실행 파일 실행
+    5. 실행 시간과 메모리 측정
+    6. time_score, memory_score 계산
+
+    단, 이 함수는 final_score나 performance_score를 계산하지 않는다.
+*/
 CandidateResult evaluateCandidate(const string& sourcePath) {
     CandidateResult result;
 
@@ -257,10 +298,15 @@ CandidateResult evaluateCandidate(const string& sourcePath) {
 
     if (!result.compileSuccess) {
         cout << "[컴파일 실패] " << result.fileName << endl;
+
         result.runSuccess = false;
+        result.timeout = false;
+
+        result.semanticScore = 0.0;
+        result.passRate = 0.0;
         result.timeScore = 0.0;
         result.memoryScore = 0.0;
-        result.performanceScore = 0.0;
+
         return result;
     }
 
@@ -276,30 +322,41 @@ CandidateResult evaluateCandidate(const string& sourcePath) {
             cout << "[실행 실패] 런타임 오류 또는 비정상 종료" << endl;
         }
 
+        result.semanticScore = 0.0;
+        result.passRate = 0.0;
         result.timeScore = 0.0;
         result.memoryScore = 0.0;
-        result.performanceScore = 0.0;
+
         return result;
     }
 
+    result.semanticScore = 0.0;
+    result.passRate = 0.0;
     result.timeScore = calculateTimeScore(result.executionTimeMs);
     result.memoryScore = calculateMemoryScore(result.peakMemoryKB);
-    result.performanceScore = calculatePerformanceScore(
-        result.timeScore,
-        result.memoryScore
-    );
 
-    cout << fixed << setprecision(4);
+    cout << fixed << setprecision(2);
     cout << "[실행 성공]" << endl;
     cout << "실행 시간: " << result.executionTimeMs << "ms" << endl;
     cout << "최대 메모리 사용량: " << result.peakMemoryKB << "KB" << endl;
+    cout << "semantic_score: " << result.semanticScore << "  // placeholder" << endl;
+    cout << "pass_rate: " << result.passRate << "  // placeholder" << endl;
     cout << "time_score: " << result.timeScore << endl;
     cout << "memory_score: " << result.memoryScore << endl;
-    cout << "performance_score: " << result.performanceScore << endl;
 
     return result;
 }
 
+/*
+    결과를 CSV 파일로 저장하는 함수
+
+    CSV 형식:
+    file_name,semantic_score,pass_rate,time_score,memory_score 
+    --추후에 2단계 제작자와 csv파일 형식을 더 논의해 볼 예정
+
+    semantic_score와 pass_rate는 3단계(현재단계)에서는 계산하지 않으므로 0.00으로 저장된다.
+    4단계 담당자가 이 CSV를 기반으로 semantic_score, pass_rate를 채우고 final_score를 계산할 수 있다.
+*/
 void writeCsvResult(const vector<CandidateResult>& results, const string& outputPath) {
     fs::create_directories("results");
 
@@ -310,62 +367,29 @@ void writeCsvResult(const vector<CandidateResult>& results, const string& output
         return;
     }
 
-    fout << "file_name,compile_success,run_success,timeout,";
-    fout << "execution_time_ms,peak_memory_kb,";
-    fout << "time_score,memory_score,performance_score\n";
+    fout << "file_name,semantic_score,pass_rate,time_score,memory_score\n";
 
-    fout << fixed << setprecision(4);
+    fout << fixed << setprecision(2);
 
     for (const auto& r : results) {
         fout << r.fileName << ",";
-        fout << (r.compileSuccess ? "true" : "false") << ",";
-        fout << (r.runSuccess ? "true" : "false") << ",";
-        fout << (r.timeout ? "true" : "false") << ",";
-        fout << r.executionTimeMs << ",";
-        fout << r.peakMemoryKB << ",";
+        fout << r.semanticScore << ",";
+        fout << r.passRate << ",";
         fout << r.timeScore << ",";
-        fout << r.memoryScore << ",";
-        fout << r.performanceScore << "\n";
+        fout << r.memoryScore << "\n";
     }
 
     fout.close();
 }
 
-void printBestCandidate(const vector<CandidateResult>& results) {
-    int bestIndex = -1;
-    double bestScore = -1.0;
-
-    for (int i = 0; i < (int)results.size(); i++) {
-        if (results[i].performanceScore > bestScore) {
-            bestScore = results[i].performanceScore;
-            bestIndex = i;
-        }
-    }
-
-    cout << "\n==============================\n";
-    cout << "[최종 성능 비교 결과]\n";
-
-    if (bestIndex == -1 || bestScore <= 0.0) {
-        cout << "선택 가능한 후보 코드가 없습니다." << endl;
-        return;
-    }
-
-    const CandidateResult& best = results[bestIndex];
-
-    cout << "Best Candidate: " << best.fileName << endl;
-    cout << fixed << setprecision(4);
-    cout << "Performance Score: " << best.performanceScore << endl;
-    cout << "Execution Time: " << best.executionTimeMs << "ms" << endl;
-    cout << "Peak Memory: " << best.peakMemoryKB << "KB" << endl;
-}
 
 int main() {
     cout << "========================================\n";
-    cout << " C++ Performance Measurement Engine\n";
+    cout << " C++ Execution Metrics Evaluator\n";
     cout << "========================================\n";
 
     string candidateDir = "candidates";
-    string resultCsvPath = "results/performance_result.csv";
+    string resultCsvPath = "results/execution_metrics.csv";
 
     vector<string> candidateFiles = findCandidateFiles(candidateDir);
 
@@ -386,10 +410,9 @@ int main() {
     writeCsvResult(results, resultCsvPath);
 
     cout << "\n[INFO] CSV 결과 저장 완료: " << resultCsvPath << endl;
+    cout << "[INFO] CSV 형식: file_name,semantic_score,pass_rate,time_score,memory_score" << endl;
 
-    printBestCandidate(results);
-
-    cout << "\n성능 측정이 완료되었습니다." << endl;
+    cout << "\n3단계 실행 평가가 완료되었습니다." << endl;
 
     return 0;
 }
