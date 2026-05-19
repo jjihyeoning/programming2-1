@@ -1,0 +1,6 @@
+.vscode/
+
+cpp_evaluator/build/
+cpp_evaluator/candidates/
+cpp_evaluator/results/
+cpp_evaluator/evaluator.exe
