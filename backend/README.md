@@ -1,8 +1,76 @@
-app.py는 사용자가 보낸 C++ 코드들을 받아서 파일로 저장하고, C++ 평가 프로그램을 실행한 다음, 평가 결과를 다시 화면에 보내주는 중간 연결 담당 코드
+# Backend
 
-Flask = 프론트 요청 받는 서버
-request.get_json() = 프론트가 보낸 코드 읽기
-save_candidate_codes() = 받은 코드를 .cpp 파일로 저장
-subprocess.run() = C++ 평가 프로그램 실행
-csv.DictReader() = C++ 평가 결과 읽기
-jsonify() = 결과를 프론트로 반환
+## 역할
+
+이 폴더는 프론트엔드와 C++ 평가 엔진을 연결하는 Flask 기반 백엔드 서버를 담당한다.
+
+백엔드는 코드 평가를 직접 수행하지 않고, 프론트엔드에서 받은 요청 데이터를 `cpp_evaluator/request_body.json`으로 저장한 뒤 C++ evaluator를 실행한다. 이후 C++ 평가 결과 CSV를 읽어 JSON 형태로 프론트엔드에 반환한다.
+
+## 현재 동작 흐름
+
+```txt
+프론트엔드
+→ POST /api/evaluate
+→ backend/app.py
+→ cpp_evaluator/request_body.json 저장
+→ C++ evaluator 실행
+→ InputManager가 후보 코드 .cpp 파일 생성
+→ evaluator가 컴파일/실행/성능 측정
+→ execution_metrics.csv 생성
+→ 백엔드가 JSON으로 반환
+```
+
+````md
+## InputManager 연동 설명
+
+이번 수정에서는 기존에 Python 백엔드가 담당하던 후보 코드 파일 생성 기능을 C++ 평가 엔진 내부로 옮겼다.
+
+기존 구조에서는 `backend/app.py`가 프론트엔드에서 전달받은 `submissions` 데이터를 직접 읽고, 각 후보 코드를 `cpp_evaluator/candidates` 폴더에 `.cpp` 파일로 저장했다.
+
+수정 후에는 백엔드가 후보 코드를 직접 저장하지 않고, 요청 JSON 전체를 `cpp_evaluator/request_body.json` 파일로 저장한다. 이후 백엔드가 C++ evaluator를 실행하면, evaluator 내부에서 `InputManager`가 먼저 실행되어 `request_body.json`을 읽고 후보 코드 파일을 생성한다.
+
+`InputManager`는 `cpp_evaluator/InputManager.h`와 `cpp_evaluator/InputManager.cpp`로 구성된다.
+
+`InputManager.h`는 `evaluator.cpp`에서 사용할 함수 선언을 제공한다.
+
+```cpp
+void prepareCandidatesFromRequestJson();
+````
+
+`InputManager.cpp`는 실제 후보 코드 생성 로직을 담당한다. 주요 역할은 다음과 같다.
+
+```txt
+request_body.json 파일 읽기
+submissions 배열에서 model, code 값 추출
+candidates 폴더 초기화
+모델명을 기반으로 code_모델명.cpp 파일 생성
+code 문자열의 escape 문자 복원
+파일명에 사용할 수 없는 문자 처리
+빈 model 값에 대한 기본 이름 부여
+빈 code 값은 저장하지 않고 skip
+```
+
+예를 들어 프론트엔드에서 다음과 같은 요청이 전달되면,
+
+```json
+{
+  "submissions": [
+    {
+      "model": "gpt",
+      "code": "#include <iostream>\nusing namespace std;\nint main(){ cout << 1; return 0; }"
+    },
+    {
+      "model": "gemini",
+      "code": "#include <iostream>\nusing namespace std;\nint main(){ cout << 2; return 0; }"
+    }
+  ]
+}
+```
+
+백엔드는 이 내용을 `cpp_evaluator/request_body.json`으로 저장한다. 이후 C++ evaluator가 실행되면 `InputManager`가 해당 JSON을 읽어 아래와 같은 후보 코드 파일을 생성한다.
+
+```txt
+cpp_evaluator/candidates/code_gpt.cpp
+cpp_evaluator/candidates/code_gemini.cpp
+```
+
