@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "evaluator.h"
 #include "InputManager.h"
 /*현재 중간 제출 버전에서는 테스트케이스 기반 정답 검증 기능을 제외하고, 
 코드의 순수 실행 성능 측정에 집중하였다. 
@@ -23,28 +24,7 @@ pass_rate까지 계산할 수 있도록 확장할 예정이다.*/
 using namespace std;
 namespace fs = std::filesystem;
 
-struct CandidateResult {
-    string fileName;
-    string sourcePath;
-    string exePath;
 
-    bool compileSuccess = false;
-    bool runSuccess = false;
-    bool timeout = false;
-
-    long long executionTimeMs = 0;
-    size_t peakMemoryKB = 0;
-
-    double semanticScore = 0.0;  // 2단계 Python AI 평가에서 채워질 값
-    double passRate = 0.0;       // 테스트케이스 기반 정답률 평가에서 채워질 값
-    double timeScore = 0.0;      // 3단계 C++ 실행 평가에서 계산 (이 코드에 나옴)
-    double memoryScore = 0.0;    // 3단계 C++ 실행 평가에서 계산 (이 코드에 나옴)
-
-    string compileLog;
-};  //후보 코드의 평과 결과를 저장하는 구조체
-
-
-//candidates 폴더 안에 있는 .cpp 후보 코드 파일들을 자동으로 찾는 함수
 vector<string> findCandidateFiles(const string& candidateDir) {
     vector<string> files;
 

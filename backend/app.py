@@ -61,6 +61,7 @@ def save_request_body(data):
 
 def build_evaluator_if_needed():
     evaluator_cpp_path = os.path.join(CPP_EVALUATOR_DIR, "evaluator.cpp")
+    evaluator_h_path = os.path.join(CPP_EVALUATOR_DIR, "evaluator.h")
     input_manager_cpp_path = os.path.join(CPP_EVALUATOR_DIR, "InputManager.cpp")
 
     if not os.path.exists(evaluator_cpp_path):
@@ -69,7 +70,7 @@ def build_evaluator_if_needed():
     if not os.path.exists(input_manager_cpp_path):
         raise Exception("cpp_evaluator/InputManager.cpp 파일을 찾을 수 없습니다.")
 
-    source_paths = [evaluator_cpp_path, input_manager_cpp_path]
+    source_paths = [evaluator_cpp_path, evaluator_h_path, input_manager_cpp_path]
     should_build = not os.path.exists(EVALUATOR_EXE_PATH)
 
     if not should_build:
