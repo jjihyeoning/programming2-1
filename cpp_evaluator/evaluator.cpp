@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "InputManager.h"
 /*현재 중간 제출 버전에서는 테스트케이스 기반 정답 검증 기능을 제외하고, 
 코드의 순수 실행 성능 측정에 집중하였다. 
 따라서 pass_rate는 산출하지 않으며, 
@@ -285,7 +286,7 @@ CandidateResult evaluateCandidate(const string& sourcePath) {
 
     fs::create_directories("build");
 
-    result.exePath = "build/" + baseName + ".exe";
+    result.exePath = "build\\" + baseName + ".exe";
 
     cout << "\n==============================\n";
     cout << "[평가 시작] " << result.fileName << endl;
@@ -384,6 +385,14 @@ void writeCsvResult(const vector<CandidateResult>& results, const string& output
 
 
 int main() {
+    try {
+        prepareCandidatesFromRequestJson();
+    }
+    catch (const exception& e) {
+        cerr << "[ERROR] 후보 코드 준비 실패: " << e.what() << endl;
+        return 1;
+    }
+
     cout << "========================================\n";
     cout << " C++ Execution Metrics Evaluator\n";
     cout << "========================================\n";
