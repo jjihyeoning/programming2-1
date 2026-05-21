@@ -66,7 +66,7 @@ type Candidate = {
 // 사용자가 선택할 수 있는 프로그래밍 언어 목록
 const LANGUAGES = ["Python","C","C++", "Java"];
 
-// 현재는 실제 API 연결 전이므로 예시 LLM 모델 데이터를 사용
+// 예시 문제와 예시 LLM 응답으로 백엔드 평가 흐름을 테스트하기 위한 모델 데이터
 const MOCK_MODELS = [
   { name: "GPT-5", color: "oklch(0.78 0.12 250)" },
   { name: "Claude Sonnet 4.5", color: "oklch(0.8 0.11 35)" },
@@ -156,6 +156,19 @@ function Index() {
       return;
     }
 
+    await requestBackendEvaluation(
+      candidates.map((candidate) => ({
+        model: candidate.model,
+        code: candidate.code,
+      })),
+      "candidates"
+    );
+  };
+
+  const requestBackendEvaluation = async (
+    submissions: { model: string; code: string }[],
+    fallbackStage: Stage
+  ) => {
     try {
       setStage("scoring");
 
@@ -167,10 +180,7 @@ function Index() {
         body: JSON.stringify({
           problem,
           language,
-          submissions: candidates.map((candidate) => ({
-            model: candidate.model,
-            code: candidate.code,
-          })),
+          submissions,
         }),
       });
 
@@ -186,7 +196,7 @@ function Index() {
     } catch (error) {
       console.error(error);
       toast.error("백엔드 연결 또는 평가 중 오류가 발생했습니다.");
-      setStage("candidates");
+      setStage(fallbackStage);
     }
   };
 
@@ -346,7 +356,7 @@ function InputStage({
         </h2>
 
         <p className="mt-4 text-base font-medium text-muted-foreground">
-          여러 LLM이 동시에 답하고, 서로 검증하고, 성능을 측정합니다.
+          예시 문제와 예시 LLM 응답으로 백엔드 평가 흐름을 테스트하는 모드입니다
         </p>
       </div>
 

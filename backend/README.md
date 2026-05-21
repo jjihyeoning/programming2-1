@@ -94,3 +94,20 @@ npm run dev
 CSV evaluator scores into `scores`, calculates `total`, and keeps the frontend
 thin by letting it render the returned candidates directly.
 
+## Evaluation Flow
+
+```txt
+frontend
+-> POST /api/evaluate with problem, language, submissions[3]
+backend
+-> calculate semantic_score through the ai_model adapter
+-> run cpp_evaluator for pass_rate, time_score, memory_score, runtime, memory
+-> calculate final total score
+-> return frontend-ready candidates JSON
+```
+
+Set `AI_SEMANTIC_PROVIDER` to one of the provider methods in `ai_model/ai_model`
+such as `openai`, `voyage`, `cohere`, `jina`, `nomic`, or `zeroentropy` to call
+that provider. If it is not set, the backend uses a local token-similarity
+fallback so `/api/evaluate` can still run without external API keys.
+

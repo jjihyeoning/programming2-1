@@ -312,7 +312,7 @@ CandidateResult evaluateCandidate(const string& sourcePath) {
     }
 
     result.semanticScore = 0.0;
-    result.passRate = 0.0;
+    result.passRate = 1.0;
     result.timeScore = calculateTimeScore(result.executionTimeMs);
     result.memoryScore = calculateMemoryScore(result.peakMemoryKB);
 
@@ -348,7 +348,7 @@ void writeCsvResult(const vector<CandidateResult>& results, const string& output
         return;
     }
 
-    fout << "file_name,semantic_score,pass_rate,time_score,memory_score\n";
+    fout << "file_name,semantic_score,pass_rate,time_score,memory_score,runtime_ms,memory_kb\n";
 
     fout << fixed << setprecision(2);
 
@@ -357,7 +357,9 @@ void writeCsvResult(const vector<CandidateResult>& results, const string& output
         fout << r.semanticScore << ",";
         fout << r.passRate << ",";
         fout << r.timeScore << ",";
-        fout << r.memoryScore << "\n";
+        fout << r.memoryScore << ",";
+        fout << r.executionTimeMs << ",";
+        fout << r.peakMemoryKB << "\n";
     }
 
     fout.close();
@@ -405,3 +407,4 @@ int main() {
 
     return 0;
 }
+

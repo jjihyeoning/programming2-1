@@ -4,3 +4,7 @@ cpp_evaluator/build/
 cpp_evaluator/candidates/
 cpp_evaluator/results/
 cpp_evaluator/evaluator.exe
+__pycache__/
+*.pyc
+cpp_evaluator/request_body.json
+cpp_evaluator/results/

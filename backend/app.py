@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import csv
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -12,6 +14,7 @@ CORS(app)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 CPP_EVALUATOR_DIR = os.path.join(PROJECT_ROOT, "cpp_evaluator")
+AI_MODEL_PATH = os.path.join(PROJECT_ROOT, "ai_model", "ai_model")
 REQUEST_BODY_PATH = os.path.join(CPP_EVALUATOR_DIR, "request_body.json")
 RESULT_CSV_PATH = os.path.join(CPP_EVALUATOR_DIR, "results", "execution_metrics.csv")
 EVALUATOR_EXE_PATH = os.path.join(CPP_EVALUATOR_DIR, "evaluator.exe")
@@ -42,10 +45,11 @@ def evaluate_codes():
             }), 400
 
         save_request_body(data)
+        semantic_scores = run_ai_semantic_evaluator(data.get("problem", ""), submissions)
         build_evaluator_if_needed()
         run_cpp_evaluator()
         results = parse_csv_result()
-        candidates = build_frontend_candidates(submissions, results)
+        candidates = build_frontend_candidates(submissions, results, semantic_scores)
 
         return jsonify({
             "success": True,
@@ -160,7 +164,52 @@ def parse_csv_result():
     return results
 
 
-def build_frontend_candidates(submissions, results):
+def run_ai_semantic_evaluator(problem, submissions):
+    provider = os.environ.get("AI_SEMANTIC_PROVIDER", "").strip().lower()
+
+    if provider:
+        try:
+            evaluator = load_ai_model_evaluator()
+            score_func = getattr(evaluator, f"get_{provider}_score")
+            return [
+                normalize_score(score_func(problem, submission.get("code", "")))
+                for submission in submissions
+            ]
+        except Exception as e:
+            print(f"[WARN] ai_model semantic evaluation failed: {e}")
+
+    return [
+        calculate_local_semantic_score(problem, submission.get("code", ""))
+        for submission in submissions
+    ]
+
+
+def load_ai_model_evaluator():
+    loader = importlib.machinery.SourceFileLoader("ai_model_module", AI_MODEL_PATH)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module.Performance_measurement()
+
+
+def calculate_local_semantic_score(problem, code):
+    problem_tokens = tokenize(problem)
+    code_tokens = tokenize(code)
+
+    if not problem_tokens or not code_tokens:
+        return 0.0
+
+    overlap = len(problem_tokens & code_tokens)
+    union = len(problem_tokens | code_tokens)
+
+    return round((overlap / union) * 100, 1)
+
+
+def tokenize(text):
+    return set(re.findall(r"\w+", text.lower(), flags=re.UNICODE))
+
+
+def build_frontend_candidates(submissions, results, semantic_scores=None):
     result_by_file_name = {
         result.get("fileName"): result
         for result in results
@@ -180,7 +229,10 @@ def build_frontend_candidates(submissions, results):
 
         result = result or {}
 
-        semantic_score = get_score(result, "semanticScore", "semantic_score")
+        if semantic_scores and index < len(semantic_scores):
+            semantic_score = normalize_score(semantic_scores[index])
+        else:
+            semantic_score = get_score(result, "semanticScore", "semantic_score")
         pass_rate = get_score(result, "passRate", "pass_rate")
         time_score = get_score(result, "timeScore", "time_score")
         memory_score = get_score(result, "memoryScore", "memory_score")
@@ -229,7 +281,16 @@ def make_safe_file_name(value):
 
 
 def get_score(result, camel_key, snake_key):
-    return parse_number(result.get(camel_key, result.get(snake_key)))
+    return normalize_score(parse_number(result.get(camel_key, result.get(snake_key))))
+
+
+def normalize_score(value):
+    value = parse_number(value)
+
+    if 0.0 <= value <= 1.0:
+        return round(value * 100, 1)
+
+    return round(value, 1)
 
 
 def parse_number(value):
