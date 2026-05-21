@@ -74,3 +74,23 @@ cpp_evaluator/candidates/code_gpt.cpp
 cpp_evaluator/candidates/code_gemini.cpp
 ```
 
+## Run
+
+Backend:
+
+```bash
+cd backend
+python app.py
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm run dev
+```
+
+`POST /api/evaluate` now returns frontend-ready `candidates`. The backend maps
+CSV evaluator scores into `scores`, calculates `total`, and keeps the frontend
+thin by letting it render the returned candidates directly.
+

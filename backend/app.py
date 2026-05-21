@@ -3,6 +3,7 @@ from flask_cors import CORS
 import csv
 import json
 import os
+import re
 import subprocess
 
 app = Flask(__name__)
@@ -14,6 +15,11 @@ CPP_EVALUATOR_DIR = os.path.join(PROJECT_ROOT, "cpp_evaluator")
 REQUEST_BODY_PATH = os.path.join(CPP_EVALUATOR_DIR, "request_body.json")
 RESULT_CSV_PATH = os.path.join(CPP_EVALUATOR_DIR, "results", "execution_metrics.csv")
 EVALUATOR_EXE_PATH = os.path.join(CPP_EVALUATOR_DIR, "evaluator.exe")
+MODEL_COLORS = [
+    "oklch(0.78 0.12 250)",
+    "oklch(0.8 0.11 35)",
+    "oklch(0.78 0.11 160)",
+]
 
 
 @app.route("/api/evaluate", methods=["POST"])
@@ -39,11 +45,12 @@ def evaluate_codes():
         build_evaluator_if_needed()
         run_cpp_evaluator()
         results = parse_csv_result()
+        candidates = build_frontend_candidates(submissions, results)
 
         return jsonify({
             "success": True,
             "message": "평가가 완료되었습니다.",
-            "results": results
+            "candidates": candidates
         })
 
     except Exception as e:
@@ -134,13 +141,102 @@ def parse_csv_result():
         for row in reader:
             results.append({
                 "fileName": row.get("file_name"),
-                "semanticScore": float(row.get("semantic_score", 0)),
-                "passRate": float(row.get("pass_rate", 0)),
-                "timeScore": float(row.get("time_score", 0)),
-                "memoryScore": float(row.get("memory_score", 0))
+                "semanticScore": parse_number(row.get("semantic_score")),
+                "passRate": parse_number(row.get("pass_rate")),
+                "timeScore": parse_number(row.get("time_score")),
+                "memoryScore": parse_number(row.get("memory_score")),
+                "runtimeMs": parse_number(
+                    row.get("runtime_ms")
+                    or row.get("execution_time_ms")
+                    or row.get("runtimeMs")
+                ),
+                "memoryKb": parse_number(
+                    row.get("memory_kb")
+                    or row.get("peak_memory_kb")
+                    or row.get("memoryKb")
+                )
             })
 
     return results
+
+
+def build_frontend_candidates(submissions, results):
+    result_by_file_name = {
+        result.get("fileName"): result
+        for result in results
+        if result.get("fileName")
+    }
+
+    candidates = []
+
+    for index, submission in enumerate(submissions):
+        model = submission.get("model") or f"model_{index + 1}"
+        code = submission.get("code") or ""
+        file_name = make_candidate_file_name(model, index + 1)
+        result = result_by_file_name.get(file_name)
+
+        if result is None and index < len(results):
+            result = results[index]
+
+        result = result or {}
+
+        semantic_score = get_score(result, "semanticScore", "semantic_score")
+        pass_rate = get_score(result, "passRate", "pass_rate")
+        time_score = get_score(result, "timeScore", "time_score")
+        memory_score = get_score(result, "memoryScore", "memory_score")
+
+        total = round(
+            semantic_score * 0.3
+            + pass_rate * 0.4
+            + time_score * 0.2
+            + memory_score * 0.1,
+            1
+        )
+
+        candidates.append({
+            "id": str(index),
+            "model": model,
+            "color": MODEL_COLORS[index % len(MODEL_COLORS)],
+            "code": code,
+            "scores": {
+                "correctness": pass_rate,
+                "style": semantic_score,
+                "performance": time_score,
+                "crossReview": memory_score
+            },
+            "total": total,
+            "runtimeMs": result.get("runtimeMs", 0),
+            "memoryKb": result.get("memoryKb", 0)
+        })
+
+    return candidates
+
+
+def make_candidate_file_name(model, fallback_index):
+    safe_model_name = make_safe_file_name(model)
+
+    if not safe_model_name:
+        safe_model_name = f"model_{fallback_index}"
+
+    return f"code_{safe_model_name}.cpp"
+
+
+def make_safe_file_name(value):
+    if not value or not value.strip():
+        return ""
+
+    return re.sub(r'[\s/\\:*?"<>|]', "_", value)
+
+
+def get_score(result, camel_key, snake_key):
+    return parse_number(result.get(camel_key, result.get(snake_key)))
+
+
+def parse_number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 if __name__ == "__main__":

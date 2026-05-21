@@ -64,14 +64,13 @@ type Candidate = {
 };
 
 // 사용자가 선택할 수 있는 프로그래밍 언어 목록
-const LANGUAGES = ["Python", "JavaScript", "TypeScript", "C++", "Java", "Go", "Rust"];
+const LANGUAGES = ["Python","C","C++", "Java"];
 
 // 현재는 실제 API 연결 전이므로 예시 LLM 모델 데이터를 사용
 const MOCK_MODELS = [
   { name: "GPT-5", color: "oklch(0.78 0.12 250)" },
   { name: "Claude Sonnet 4.5", color: "oklch(0.8 0.11 35)" },
   { name: "Gemini 2.5 Pro", color: "oklch(0.78 0.11 160)" },
-  { name: "DeepSeek V3", color: "oklch(0.78 0.12 320)" },
 ];
 
 // 선택한 언어와 입력 문제를 바탕으로 예시 코드를 생성하는 함수
@@ -151,9 +150,44 @@ function Index() {
   };
 
   // 검증 진행 화면을 잠깐 보여준 뒤 결과 화면으로 이동
-  const runScoring = () => {
-    setStage("scoring");
-    setTimeout(() => setStage("result"), 1800);
+  const runScoring = async () => {
+    if (candidates.length === 0) {
+      toast.error("평가할 후보 코드가 없습니다.");
+      return;
+    }
+
+    try {
+      setStage("scoring");
+
+      const response = await fetch("http://127.0.0.1:5000/api/evaluate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          problem,
+          language,
+          submissions: candidates.map((candidate) => ({
+            model: candidate.model,
+            code: candidate.code,
+          })),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "백엔드 평가 실패");
+      }
+
+      setCandidates(data.candidates);
+      setStage("result");
+      toast.success("백엔드 평가가 완료되었습니다.");
+    } catch (error) {
+      console.error(error);
+      toast.error("백엔드 연결 또는 평가 중 오류가 발생했습니다.");
+      setStage("candidates");
+    }
   };
 
   // 처음 입력 화면으로 돌아가기
@@ -187,7 +221,7 @@ function Index() {
             <Sparkles className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-foreground">MultiVerify</h1>
+            <h1 className="text-lg font-semibold text-foreground">LLLLMM</h1>
             <p className="text-xs text-muted-foreground">다중 LLM 코드 교차 검증</p>
           </div>
         </div>
@@ -462,7 +496,7 @@ function CandidatesStage({
 function ScoringStage() {
   const steps = [
     "LLM 간 교차 검증 진행 중...",
-    "C++ 벤치마크로 성능 측정 중...",
+    "C++ 성능 평가 측정 중...",
     "가중치 기반 종합 점수 계산 중...",
   ];
 
