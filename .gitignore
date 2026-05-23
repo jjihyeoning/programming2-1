@@ -1,9 +1,14 @@
 .vscode/
+backend/.env
 
 cpp_evaluator/build/
 cpp_evaluator/candidates/
 cpp_evaluator/results/
 cpp_evaluator/evaluator.exe
+finalscore/execution_result.csv
+finalscore/semantic_result.csv
+finalscore/final_scores.csv
+finalscore/finalscore.exe
 __pycache__/
 *.pyc
 cpp_evaluator/request_body.json
