@@ -7,17 +7,24 @@ import cohere
 from sklearn.metrics.pairwise import cosine_similarity
 import time
 
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ENV_PATH = Path(__file__).resolve().parent.parent / "backend" / ".env"
+load_dotenv(ENV_PATH)
+
 class Performance_measurement:
     def __init__(self):
         # API 키 입력 (최종결과물에 첨부하여 실행할 예정)
         self.api_keys = {
-            "openai": "________________",
-            "voyage": "________________",
-            "cohere": "________________",
-            "jina": "________________",
-            "nomic": "________________",
-            "zeroentropy": "________________"
-        }
+    "openai": os.getenv("OPENAI_API_KEY", ""),
+    "voyage": os.getenv("VOYAGE_API_KEY", ""),
+    "cohere": os.getenv("COHERE_API_KEY", ""),
+    "jina": os.getenv("JINA_API_KEY", ""),
+    "nomic": os.getenv("NOMIC_API_KEY", ""),
+    "zeroentropy": os.getenv("ZEROENTROPY_API_KEY", "")
+    }
 
     # cosine_similarity 함수로 두 벡터 간 유사도 측정
     # (임베딩 모델들에 사용 예정)
