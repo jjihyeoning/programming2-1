@@ -30,8 +30,10 @@ FINALSCORE_DIR = os.path.join(PROJECT_ROOT, "finalscore")
 FINALSCORE_CPP_PATH = os.path.join(FINALSCORE_DIR, "finalscore.cpp")
 FINALSCORE_EXE_PATH = os.path.join(FINALSCORE_DIR, "finalscore.exe")
 FINALSCORE_EXECUTION_INPUT_PATH = os.path.join(FINALSCORE_DIR, "execution_result.csv")
-FINALSCORE_SEMANTIC_INPUT_PATH = os.path.join(FINALSCORE_DIR, "semantic_result.csv")
 FINALSCORE_RESULT_PATH = os.path.join(FINALSCORE_DIR, "final_scores.csv")
+SEMANTIC_FILTER_DIR = os.path.join(PROJECT_ROOT, "semantic_filter")
+PASSED_CANDIDATES_PATH = os.path.join(SEMANTIC_FILTER_DIR, "passed_candidates.csv")
+
 
 MODEL_COLORS = [
     "oklch(0.78 0.12 250)",
@@ -44,6 +46,7 @@ MODEL_COLORS = [
 def evaluate_codes():
     try:
         data = request.get_json() or {}
+
         problem = (data.get("problem") or "").strip()
         language = (data.get("language") or "C++").strip()
 
@@ -53,24 +56,54 @@ def evaluate_codes():
                 "message": "problem 데이터가 없습니다."
             }), 400
 
-        submissions = generate_submissions(problem, language)
+        # 1. LLM 후보 코드 3개 생성
+        all_submissions = generate_submissions(problem, language)
+
+        # 2. semantic_filter.cpp가 통과시킨 후보만 남김
+        passed_submissions = filter_passed_submissions(all_submissions)
+
+        if not passed_submissions:
+            return jsonify({
+                "success": False,
+                "message": "semantic 필터를 통과한 후보 코드가 없습니다."
+            }), 400
+
+        print("[FILTER] 전체 후보 수:", len(all_submissions))
+        print("[FILTER] 통과 후보 수:", len(passed_submissions))
+        print("[FILTER] 통과 모델:", [
+            submission["model"] for submission in passed_submissions
+        ])
+
+        # 3. 통과 후보만 cpp_evaluator 입력 JSON으로 저장
         request_body = {
             "problem": problem,
             "language": language,
-            "submissions": submissions
+            "submissions": passed_submissions
         }
 
         save_request_body(request_body)
+
+        # 4. 통과 후보만 C++ 실행 평가
         build_evaluator_if_needed()
         run_cpp_evaluator()
-        save_semantic_result_csv(submissions)
+
+        # 5. cpp_evaluator 결과를 finalscore 입력으로 준비
+        # semantic_result.csv는 semantic_filter.cpp가 이미 생성함
         prepare_finalscore_input_csv()
+
+        # 6. 최종 점수 계산
         build_finalscore_if_needed()
         run_finalscore()
 
+        # 7. 프론트에 보여줄 결과 생성
         final_results = parse_finalscore_csv()
         execution_metrics = parse_execution_metrics_csv()
-        candidates = build_frontend_candidates_from_finalscore(submissions, final_results, execution_metrics)
+
+        candidates = build_frontend_candidates_from_finalscore(
+            passed_submissions,
+            final_results,
+            execution_metrics
+        )
 
         return jsonify({
             "success": True,
@@ -179,6 +212,22 @@ def save_request_body(data):
     except Exception as e:
         raise Exception(f"request_body.json 저장 실패: {e}")
 
+def filter_passed_submissions(submissions):
+    passed_models = []
+
+    with open(PASSED_CANDIDATES_PATH, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            passed_models.append(row["code_model"])
+
+    filtered_submissions = []
+
+    for submission in submissions:
+        if submission["model"] in passed_models:
+            filtered_submissions.append(submission)
+
+    return filtered_submissions
 
 def build_evaluator_if_needed():
     evaluator_cpp_path = os.path.join(CPP_EVALUATOR_DIR, "evaluator.cpp")
@@ -235,18 +284,6 @@ def run_cpp_evaluator():
 
     if result.returncode != 0:
         raise Exception(f"evaluator.exe 실행 실패: {result.stderr or result.stdout}")
-
-
-def save_semantic_result_csv(submissions):
-    try:
-        with open(FINALSCORE_SEMANTIC_INPUT_PATH, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["file_name", "semantic_score"])
-            for index, submission in enumerate(submissions):
-                # TODO: Replace fixed semantic score with AI-based semantic evaluation.
-                writer.writerow([make_candidate_file_name(submission.get("model", ""), index + 1), "0.80"])
-    except Exception as e:
-        raise Exception(f"semantic_result.csv 생성 실패: {e}")
 
 
 def prepare_finalscore_input_csv():
