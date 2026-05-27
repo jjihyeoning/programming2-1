@@ -7,17 +7,24 @@ import cohere
 from sklearn.metrics.pairwise import cosine_similarity
 import time
 
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ENV_PATH = Path(__file__).resolve().parent.parent / "backend" / ".env"
+load_dotenv(ENV_PATH)
+
 class Performance_measurement:
     def __init__(self):
         # API 키 입력 (최종결과물에 첨부하여 실행할 예정)
         self.api_keys = {
-            "openai": "________________",
-            "voyage": "________________",
-            "cohere": "________________",
-            "jina": "________________",
-            "nomic": "________________",
-            "zeroentropy": "________________"
-        }
+    "openai": os.getenv("OPENAI_API_KEY", ""),
+    "voyage": os.getenv("VOYAGE_API_KEY", ""),
+    "cohere": os.getenv("COHERE_API_KEY", ""),
+    "jina": os.getenv("JINA_API_KEY", ""),
+    "nomic": os.getenv("NOMIC_API_KEY", ""),
+    "zeroentropy": os.getenv("ZEROENTROPY_API_KEY", "")
+    }
 
     # cosine_similarity 함수로 두 벡터 간 유사도 측정
     # (임베딩 모델들에 사용 예정)
@@ -107,6 +114,20 @@ if __name__ == "__main__":
     evaluator = Performance_measurement()
     models = ["openai", "voyage", "cohere", "jina", "nomic", "zeroentropy"]
 
+    # 이전 실행에서 만들어진 모델별 결과 CSV 삭제
+    # 이번 실행에서 실패한 모델의 오래된 결과가 섞이지 않도록 하기 위함
+    for old_csv in Path.cwd().glob("eval_result_*.csv"):
+        old_csv.unlink()
+
+    raw_output_path = (
+        Path(__file__).resolve().parent.parent
+        / "semantic_filter"
+        / "raw_semantic_scores.csv"
+    )
+
+    if raw_output_path.exists():
+        raw_output_path.unlink()
+
     for model_name in models:
         results = []
         print(f"\n★ {model_name.upper()} 평가 시작")
@@ -134,3 +155,110 @@ if __name__ == "__main__":
             filename = f"eval_result_{model_name}.csv"
             df.to_csv(filename, index=False, encoding='utf-8-sig')
             print(f"☆ {filename} 저장 완료")
+
+
+# --- 모델별 CSV를 하나의 raw_semantic_scores.csv로 통합 ---
+# 이부분을 semantic_filter.cpp로 받아서 계산할 예정
+if __name__ == "__main__":
+    provider_names = [
+        "openai",
+        "voyage",
+        "cohere",
+        "jina",
+        "nomic",
+        "zeroentropy",
+    ]
+
+    # 현재 단독 테스트 기준 매핑
+    # 이후 backend에서 실제 LLM 후보를 넘기게 되면 이 매핑은 submissions 기반으로 변경할 예정
+    candidate_map = {
+        "Code1": {
+            "file_name": "code_Gemini.cpp",
+            "code_model": "Gemini",
+        },
+        "Code2": {
+            "file_name": "code_GPT.cpp",
+            "code_model": "GPT",
+        },
+        "Code3": {
+            "file_name": "code_Claude.cpp",
+            "code_model": "Claude",
+        },
+    }
+
+    result_directory = Path.cwd()
+
+    raw_output_path = (
+        Path(__file__).resolve().parent.parent
+        / "semantic_filter"
+        / "raw_semantic_scores.csv"
+    )
+    raw_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    raw_rows = []
+
+    for provider_name in provider_names:
+        provider_csv_path = result_directory / f"eval_result_{provider_name}.csv"
+
+        # 해당 공급자에서 성공적으로 생성된 점수만 담음
+        successful_scores = {}
+
+        if provider_csv_path.exists():
+            try:
+                provider_df = pd.read_csv(
+                    provider_csv_path,
+                    encoding="utf-8-sig",
+                )
+
+                for _, row in provider_df.iterrows():
+                    code_name = str(row["Code Name"]).strip()
+                    score = row["질문-코드 유사도"]
+
+                    if code_name in candidate_map and pd.notna(score):
+                        successful_scores[code_name] = round(float(score), 4)
+
+            except Exception as error:
+                print(
+                    f"[RAW CSV] {provider_name} 결과 파일 읽기 실패: {error}"
+                )
+
+        # 성공한 점수는 success, 없는 점수는 failed로 통합 파일에 기록
+        for code_name, candidate_info in candidate_map.items():
+            if code_name in successful_scores:
+                raw_rows.append({
+                    "file_name": candidate_info["file_name"],
+                    "code_model": candidate_info["code_model"],
+                    "provider": provider_name,
+                    "score": successful_scores[code_name],
+                    "status": "success",
+                })
+            else:
+                raw_rows.append({
+                    "file_name": candidate_info["file_name"],
+                    "code_model": candidate_info["code_model"],
+                    "provider": provider_name,
+                    "score": "",
+                    "status": "failed",
+                })
+
+    raw_df = pd.DataFrame(
+        raw_rows,
+        columns=[
+            "file_name",
+            "code_model",
+            "provider",
+            "score",
+            "status",
+        ],
+    )
+
+    raw_df.to_csv(
+        raw_output_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    print()
+    print(" 통합 Semantic 원시 점수 CSV 생성 완료")
+    print(f"[INFO] 저장 위치: {raw_output_path}")
+    print(raw_df.to_string(index=False))

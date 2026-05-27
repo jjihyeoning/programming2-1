@@ -45,6 +45,9 @@ FINALSCORE_EXE_PATH = os.path.join(FINALSCORE_DIR, "finalscore.exe")
 FINALSCORE_EXECUTION_INPUT_PATH = os.path.join(FINALSCORE_DIR, "execution_result.csv")
 FINALSCORE_SEMANTIC_INPUT_PATH = os.path.join(FINALSCORE_DIR, "semantic_result.csv")
 FINALSCORE_RESULT_PATH = os.path.join(FINALSCORE_DIR, "final_scores.csv")
+SEMANTIC_FILTER_DIR = os.path.join(PROJECT_ROOT, "semantic_filter")
+PASSED_CANDIDATES_PATH = os.path.join(SEMANTIC_FILTER_DIR, "passed_candidates.csv")
+
 
 MODEL_COLORS = [
     "oklch(0.78 0.12 250)",
@@ -57,6 +60,7 @@ MODEL_COLORS = [
 def evaluate_codes():
     try:
         data = request.get_json() or {}
+
         problem = (data.get("problem") or "").strip()
         language = (data.get("language") or "C++").strip()
 
@@ -66,24 +70,54 @@ def evaluate_codes():
                 "message": "problem 데이터가 없습니다."
             }), 400
 
-        submissions = generate_submissions(problem, language)
+        # 1. LLM 후보 코드 3개 생성
+        all_submissions = generate_submissions(problem, language)
+
+        # 2. semantic_filter.cpp가 통과시킨 후보만 남김
+        passed_submissions = filter_passed_submissions(all_submissions)
+
+        if not passed_submissions:
+            return jsonify({
+                "success": False,
+                "message": "semantic 필터를 통과한 후보 코드가 없습니다."
+            }), 400
+
+        print("[FILTER] 전체 후보 수:", len(all_submissions))
+        print("[FILTER] 통과 후보 수:", len(passed_submissions))
+        print("[FILTER] 통과 모델:", [
+            submission["model"] for submission in passed_submissions
+        ])
+
+        # 3. 통과 후보만 cpp_evaluator 입력 JSON으로 저장
         request_body = {
             "problem": problem,
             "language": language,
-            "submissions": submissions
+            "submissions": passed_submissions
         }
 
         save_request_body(request_body)
+
+        # 4. 통과 후보만 C++ 실행 평가
         build_evaluator_if_needed()
         run_cpp_evaluator()
-        save_semantic_result_csv(submissions, problem)
+        save_semantic_result_csv(passed_submissions, problem)
+
+        # 5. cpp_evaluator 결과를 finalscore 입력으로 준비
         prepare_finalscore_input_csv()
+
+        # 6. 최종 점수 계산
         build_finalscore_if_needed()
         run_finalscore()
 
+        # 7. 프론트에 보여줄 결과 생성
         final_results = parse_finalscore_csv()
         execution_metrics = parse_execution_metrics_csv()
-        candidates = build_frontend_candidates_from_finalscore(submissions, final_results, execution_metrics)
+
+        candidates = build_frontend_candidates_from_finalscore(
+            passed_submissions,
+            final_results,
+            execution_metrics
+        )
 
         return jsonify({
             "success": True,
@@ -251,6 +285,27 @@ def save_request_body(data):
     except Exception as e:
         raise Exception(f"request_body.json 저장 실패: {e}")
 
+def filter_passed_submissions(submissions):
+    """
+    semantic_filter/passed_candidates.csv 가 있으면 해당 모델만 통과시키고,
+    파일이 없으면 전체 제출을 그대로 반환한다.
+    """
+    if not os.path.exists(PASSED_CANDIDATES_PATH):
+        print("[INFO] passed_candidates.csv 없음 → 전체 후보 통과")
+        return submissions
+
+    passed_models = []
+    try:
+        with open(PASSED_CANDIDATES_PATH, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                passed_models.append(row.get("code_model", ""))
+    except Exception as e:
+        print(f"[WARN] passed_candidates.csv 읽기 실패: {e} → 전체 후보 통과")
+        return submissions
+
+    filtered = [s for s in submissions if s.get("model") in passed_models]
+    return filtered if filtered else submissions
 
 def build_evaluator_if_needed():
     evaluator_cpp_path = os.path.join(CPP_EVALUATOR_DIR, "evaluator.cpp")

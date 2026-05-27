@@ -1,6 +1,8 @@
 .vscode/
 backend/.env
-
+.env
+.venv/
+ai_model/eval_result_*.csv
 cpp_evaluator/build/
 cpp_evaluator/candidates/
 cpp_evaluator/results/
@@ -13,3 +15,5 @@ __pycache__/
 *.pyc
 cpp_evaluator/request_body.json
 cpp_evaluator/results/
+.venv/
+eval_result_*.csv
