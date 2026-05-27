@@ -94,20 +94,44 @@ npm run dev
 CSV evaluator scores into `scores`, calculates `total`, and keeps the frontend
 thin by letting it render the returned candidates directly.
 
-## Evaluation Flow
+## Current End-to-End Pipeline
 
 ```txt
 frontend
--> POST /api/evaluate with problem, language, submissions[3]
-backend
--> calculate semantic_score through the ai_model adapter
--> run cpp_evaluator for pass_rate, time_score, memory_score, runtime, memory
--> calculate final total score
--> return frontend-ready candidates JSON
+-> POST /api/evaluate with { problem, language }
+-> backend/app.py generates submissions through Gemini or mock fallback
+-> cpp_evaluator/request_body.json
+-> cpp_evaluator/evaluator.exe
+-> cpp_evaluator/results/execution_metrics.csv
+-> finalscore/semantic_result.csv
+-> finalscore/execution_result.csv
+-> finalscore/finalscore.exe
+-> finalscore/final_scores.csv
+-> backend/app.py returns frontend-ready candidates JSON
 ```
 
-Set `AI_SEMANTIC_PROVIDER` to one of the provider methods in `ai_model/ai_model`
-such as `openai`, `voyage`, `cohere`, `jina`, `nomic`, or `zeroentropy` to call
-that provider. If it is not set, the backend uses a local token-similarity
-fallback so `/api/evaluate` can still run without external API keys.
+Frontend request body:
+
+```json
+{
+  "problem": "problem text",
+  "language": "C++"
+}
+```
+
+Backend `.env` values:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-1.5-flash
+USE_MOCK_LLM=true
+ALLOW_MOCK_LLM_FALLBACK=true
+```
+
+For local development without API keys, copy `backend/.env.example` to
+`backend/.env` and keep `USE_MOCK_LLM=true`.
+
+For Gemini code generation, set `USE_MOCK_LLM=false` and provide
+`GEMINI_API_KEY`. GPT and Claude generation are separated as placeholders in
+`backend/app.py` so they can be replaced with real API calls later.
 

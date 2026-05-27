@@ -1,0 +1,10 @@
+flask
+flask-cors
+python-dotenv
+google-genai
+openai
+anthropic
+voyageai
+cohere
+numpy
+scikit-learn
