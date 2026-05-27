@@ -7,11 +7,24 @@ import os
 import re
 import shutil
 import subprocess
+import numpy as np
+
+# ── LLM 라이브러리 (없으면 None으로 처리) ────────────────────────────────
+try:
+    from google import genai as google_genai
+except ImportError:
+    google_genai = None
 
 try:
-    import google.generativeai as genai
+    from openai import OpenAI
 except ImportError:
-    genai = None
+    OpenAI = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+# ─────────────────────────────────────────────────────────────────────────
 
 load_dotenv()
 
@@ -63,7 +76,7 @@ def evaluate_codes():
         save_request_body(request_body)
         build_evaluator_if_needed()
         run_cpp_evaluator()
-        save_semantic_result_csv(submissions)
+        save_semantic_result_csv(submissions, problem)
         prepare_finalscore_input_csv()
         build_finalscore_if_needed()
         run_finalscore()
@@ -86,91 +99,150 @@ def evaluate_codes():
         }), 500
 
 
+# ── 공통 유틸 ─────────────────────────────────────────────────────────────
+
 def clean_code_block(text):
+    """LLM 응답에서 마크다운 코드 블록 제거"""
     code = (text or "").strip()
     code = re.sub(r"^```(?:cpp|c\+\+|c|python|java|javascript|typescript)?\s*", "", code, flags=re.IGNORECASE)
     code = re.sub(r"\s*```$", "", code)
     return code.strip()
 
 
+def build_prompt(problem, language):
+    """세 모델 공통 프롬프트"""
+    return (
+        f"Solve the following programming problem in {language}.\n\n"
+        "STRICT RULES — follow every rule or the answer is wrong:\n"
+        "1. Return ONLY the source code. No markdown fences (```), no explanations, no comments.\n"
+        "2. Do NOT use cin, scanf, getline, or any form of standard input (stdin).\n"
+        "3. All input values must be hardcoded as constants directly in the code.\n"
+        "4. The program must run and print its result immediately with no user interaction.\n"
+        "5. Use cout (not printf) for output.\n\n"
+        f"Problem:\n{problem}"
+    )
+
+
+# ── Gemini ────────────────────────────────────────────────────────────────
+
 def generate_code_with_gemini(problem, language):
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise Exception("Gemini API 호출 실패: GEMINI_API_KEY가 설정되지 않았습니다.")
+        raise Exception("GEMINI_API_KEY가 .env에 설정되지 않았습니다.")
+    if google_genai is None:
+        raise Exception("google-genai 패키지가 설치되지 않았습니다. (pip install google-genai)")
 
-    if genai is None:
-        raise Exception("Gemini API 호출 실패: google-generativeai 패키지가 설치되지 않았습니다.")
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    client = google_genai.Client(api_key=api_key)
 
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
-    prompt = f"""
-Solve the following programming problem in {language}.
-Return only source code. Do not include markdown. Do not include explanation.
-
-Problem:
-{problem}
-""".strip()
-
-    response = model.generate_content(prompt)
-    code = clean_code_block(getattr(response, "text", ""))
+    response = client.models.generate_content(
+        model=model_name,
+        contents=build_prompt(problem, language),
+    )
+    code = clean_code_block(response.text or "")
     if not code:
-        raise Exception("Gemini API 호출 실패: 빈 코드 응답을 받았습니다.")
+        raise Exception("Gemini API가 빈 응답을 반환했습니다.")
 
-    return {
-        "model": "Gemini",
-        "code": code
-    }
+    return {"model": "Gemini", "code": code}
 
+
+# ── GPT (OpenAI) ──────────────────────────────────────────────────────────
+
+def generate_code_with_gpt(problem, language):
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise Exception("OPENAI_API_KEY가 .env에 설정되지 않았습니다.")
+    if OpenAI is None:
+        raise Exception("openai 패키지가 설치되지 않았습니다. (pip install openai)")
+
+    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{"role": "user", "content": build_prompt(problem, language)}],
+        temperature=0.2,
+    )
+    code = clean_code_block(response.choices[0].message.content or "")
+    if not code:
+        raise Exception("GPT API가 빈 응답을 반환했습니다.")
+
+    return {"model": "GPT", "code": code}
+
+
+# ── Claude (Anthropic) ────────────────────────────────────────────────────
+
+def generate_code_with_claude(problem, language):
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise Exception("ANTHROPIC_API_KEY가 .env에 설정되지 않았습니다.")
+    if anthropic is None:
+        raise Exception("anthropic 패키지가 설치되지 않았습니다. (pip install anthropic)")
+
+    model_name = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+    client = anthropic.Anthropic(api_key=api_key)
+
+    message = client.messages.create(
+        model=model_name,
+        max_tokens=4096,
+        messages=[{"role": "user", "content": build_prompt(problem, language)}],
+    )
+    code = clean_code_block(message.content[0].text or "")
+    if not code:
+        raise Exception("Claude API가 빈 응답을 반환했습니다.")
+
+    return {"model": "Claude", "code": code}
+
+
+# ── Mock (테스트용) ───────────────────────────────────────────────────────
 
 def generate_mock_submission(problem, language, model="Gemini"):
-    code = """#include <iostream>
-using namespace std;
-
-int main() {
-    cout << 0 << endl;
-    return 0;
-}
-"""
-    return {
-        "model": model,
-        "code": code
-    }
+    code = "#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << 0 << endl;\n    return 0;\n}\n"
+    return {"model": model, "code": code}
 
 
-def generate_code_with_gpt_placeholder(problem, language):
-    return generate_mock_submission(problem, language, "GPT")
-
-
-def generate_code_with_claude_placeholder(problem, language):
-    return generate_mock_submission(problem, language, "Claude")
-
+# ── 제출 코드 생성 (메인 로직) ────────────────────────────────────────────
 
 def generate_submissions(problem, language):
+    """
+    USE_MOCK_LLM=true  → 세 모델 모두 목업 코드 반환 (API 키 불필요)
+    USE_MOCK_LLM=false → 실제 API 호출. 키가 없거나 실패 시
+                         ALLOW_MOCK_LLM_FALLBACK=true 이면 목업으로 대체.
+    """
     use_mock = os.environ.get("USE_MOCK_LLM", "true").strip().lower() == "true"
+    allow_fallback = os.environ.get("ALLOW_MOCK_LLM_FALLBACK", "true").strip().lower() == "true"
 
     if use_mock:
+        print("[INFO] USE_MOCK_LLM=true → 목업 코드를 사용합니다.")
         return [
             generate_mock_submission(problem, language, "Gemini"),
-            generate_code_with_gpt_placeholder(problem, language),
-            generate_code_with_claude_placeholder(problem, language),
+            generate_mock_submission(problem, language, "GPT"),
+            generate_mock_submission(problem, language, "Claude"),
         ]
 
+    llm_generators = [
+        ("Gemini", generate_code_with_gemini),
+        ("GPT",    generate_code_with_gpt),
+        ("Claude", generate_code_with_claude),
+    ]
+
     submissions = []
+    for model_name, generator in llm_generators:
+        try:
+            submission = generator(problem, language)
+            print(f"[INFO] {model_name} 코드 생성 완료.")
+            submissions.append(submission)
+        except Exception as e:
+            if allow_fallback:
+                print(f"[WARN] {model_name} 실패: {e} → 목업으로 대체합니다.")
+                submissions.append(generate_mock_submission(problem, language, model_name))
+            else:
+                raise Exception(f"{model_name} API 호출 실패: {e}")
 
-    try:
-        submissions.append(generate_code_with_gemini(problem, language))
-    except Exception as e:
-        if os.environ.get("ALLOW_MOCK_LLM_FALLBACK", "true").strip().lower() == "true":
-            print(f"[WARN] {e} Falling back to mock Gemini submission.")
-            submissions.append(generate_mock_submission(problem, language, "Gemini"))
-        else:
-            raise
-
-    submissions.append(generate_code_with_gpt_placeholder(problem, language))
-    submissions.append(generate_code_with_claude_placeholder(problem, language))
     return submissions
 
+
+# ── 이하 기존 코드 유지 ───────────────────────────────────────────────────
 
 def save_request_body(data):
     try:
@@ -188,7 +260,6 @@ def build_evaluator_if_needed():
 
     if not os.path.exists(evaluator_cpp_path):
         raise Exception("evaluator.cpp 컴파일 실패: cpp_evaluator/evaluator.cpp 파일을 찾을 수 없습니다.")
-
     if not os.path.exists(input_manager_cpp_path):
         raise Exception("evaluator.cpp 컴파일 실패: cpp_evaluator/InputManager.cpp 파일을 찾을 수 없습니다.")
 
@@ -237,14 +308,134 @@ def run_cpp_evaluator():
         raise Exception(f"evaluator.exe 실행 실패: {result.stderr or result.stdout}")
 
 
-def save_semantic_result_csv(submissions):
+# ── Semantic Score (AI 평가 모델) ────────────────────────────────────────
+
+def _cosine_sim(a, b):
+    """두 벡터의 코사인 유사도 (0~1)"""
+    a, b = np.array(a, dtype=float), np.array(b, dtype=float)
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    return float(np.dot(a, b) / denom) if denom > 0 else 0.0
+
+
+def _score_openai(problem, code):
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key or OpenAI is None:
+        return None
+    client = OpenAI(api_key=key)
+    q = client.embeddings.create(input=[problem], model="text-embedding-3-large").data[0].embedding
+    c = client.embeddings.create(input=[code],    model="text-embedding-3-large").data[0].embedding
+    return _cosine_sim(q, c)
+
+
+def _score_voyage(problem, code):
+    key = os.environ.get("VOYAGE_API_KEY", "").strip()
+    if not key:
+        return None
+    import voyageai
+    vo = voyageai.Client(api_key=key)
+    q = vo.embed([problem], model="voyage-code-3", input_type="query").embeddings[0]
+    c = vo.embed([code],    model="voyage-code-3", input_type="document").embeddings[0]
+    return _cosine_sim(q, c)
+
+
+def _score_cohere(problem, code):
+    key = os.environ.get("COHERE_API_KEY", "").strip()
+    if not key:
+        return None
+    import cohere
+    co = cohere.Client(key)
+    q = co.embed(texts=[problem], model="embed-multilingual-v3.0", input_type="search_query").embeddings[0]
+    c = co.embed(texts=[code],    model="embed-multilingual-v3.0", input_type="search_document").embeddings[0]
+    return _cosine_sim(q, c)
+
+
+def _score_jina(problem, code):
+    key = os.environ.get("JINA_API_KEY", "").strip()
+    if not key:
+        return None
+    import requests as req
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    def embed(text, task):
+        res = req.post("https://api.jina.ai/v1/embeddings",
+                       headers=headers,
+                       json={"model": "jina-embeddings-v3", "task": task, "input": [text]})
+        return res.json()["data"][0]["embedding"]
+    return _cosine_sim(embed(problem, "retrieval.query"), embed(code, "retrieval.passage"))
+
+
+def _score_nomic(problem, code):
+    key = os.environ.get("NOMIC_API_KEY", "").strip()
+    if not key:
+        return None
+    import requests as req
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    def embed(text, task):
+        res = req.post("https://api-atlas.nomic.ai/v1/embedding/text",
+                       headers=headers,
+                       json={"model": "nomic-embed-text-v1.5", "task_type": task, "texts": [text]})
+        return res.json()["embeddings"][0]
+    return _cosine_sim(embed(problem, "search_query"), embed(code, "search_document"))
+
+
+def _score_zeroentropy(problem, code):
+    key = os.environ.get("ZEROENTROPY_API_KEY", "").strip()
+    if not key:
+        return None
+    import requests as req
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    def embed(text):
+        res = req.post("https://api.zeroentropy.ai/v1/embeddings",
+                       headers=headers,
+                       json={"model": "zembed-1", "input": [text]})
+        return res.json()["data"][0]["embedding"]
+    return _cosine_sim(embed(problem), embed(code))
+
+
+def calculate_semantic_score(problem, code):
+    """
+    6개 임베딩 모델로 문제-코드 의미적 유사도를 계산하고 평균 반환.
+    키가 없거나 실패한 모델은 건너뜀. 모두 실패 시 0.80 기본값.
+    """
+    scorers = [
+        ("OpenAI",      _score_openai),
+        ("VoyageAI",    _score_voyage),
+        ("Cohere",      _score_cohere),
+        ("Jina",        _score_jina),
+        ("Nomic",       _score_nomic),
+        ("ZeroEntropy", _score_zeroentropy),
+    ]
+
+    scores = []
+    for name, scorer in scorers:
+        try:
+            score = scorer(problem, code)
+            if score is not None:
+                scores.append(score)
+                print(f"[Semantic] {name}: {score:.4f}")
+        except Exception as e:
+            print(f"[WARN] {name} 임베딩 실패: {e}")
+
+    if not scores:
+        print("[WARN] 모든 임베딩 모델 실패 → 기본값 0.80 사용")
+        return 0.80
+
+    avg = sum(scores) / len(scores)
+    print(f"[Semantic] 평균 점수: {avg:.4f} ({len(scores)}개 모델)")
+    return avg
+
+
+def save_semantic_result_csv(submissions, problem=""):
     try:
         with open(FINALSCORE_SEMANTIC_INPUT_PATH, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["file_name", "semantic_score"])
             for index, submission in enumerate(submissions):
-                # TODO: Replace fixed semantic score with AI-based semantic evaluation.
-                writer.writerow([make_candidate_file_name(submission.get("model", ""), index + 1), "0.80"])
+                code = submission.get("code", "")
+                if problem and code:
+                    score = calculate_semantic_score(problem, code)
+                else:
+                    score = 0.80
+                writer.writerow([make_candidate_file_name(submission.get("model", ""), index + 1), f"{score:.4f}"])
     except Exception as e:
         raise Exception(f"semantic_result.csv 생성 실패: {e}")
 
@@ -252,7 +443,6 @@ def save_semantic_result_csv(submissions):
 def prepare_finalscore_input_csv():
     if not os.path.exists(EXECUTION_METRICS_PATH):
         raise Exception("execution_metrics.csv 파일을 찾을 수 없습니다.")
-
     try:
         shutil.copyfile(EXECUTION_METRICS_PATH, FINALSCORE_EXECUTION_INPUT_PATH)
     except Exception as e:
@@ -381,7 +571,6 @@ def build_frontend_candidates_from_finalscore(submissions, final_results, execut
 def sanitize_model_name(model):
     if not model or not model.strip():
         return ""
-
     return re.sub(r'[\s/\\:*?"<>|]', "_", model)
 
 
@@ -389,7 +578,6 @@ def make_candidate_file_name(model, index):
     safe_model_name = sanitize_model_name(model)
     if not safe_model_name:
         safe_model_name = f"model_{index}"
-
     return f"code_{safe_model_name}.cpp"
 
 

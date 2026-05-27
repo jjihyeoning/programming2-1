@@ -1,4 +1,10 @@
 flask
 flask-cors
 python-dotenv
-google-generativeai
+google-genai
+openai
+anthropic
+voyageai
+cohere
+numpy
+scikit-learn
