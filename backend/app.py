@@ -113,16 +113,12 @@ def evaluate_codes():
         final_results = parse_finalscore_csv()
         execution_metrics = parse_execution_metrics_csv()
 
-        candidates = build_frontend_candidates_from_finalscore(
-            passed_submissions,
-            final_results,
-            execution_metrics
-        )
-
         return jsonify({
             "success": True,
             "message": "평가가 완료되었습니다.",
-            "candidates": candidates
+            "candidates": passed_submissions,
+            "results": final_results,
+            "executionMetrics": execution_metrics
         })
 
     except Exception as e:

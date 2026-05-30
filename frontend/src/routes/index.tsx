@@ -34,8 +34,7 @@ export const Route = createFileRoute("/")({
       { title: "LLLLMM - 다중 LLM 코드 교차 검증" },
       {
         name: "description",
-        content:
-          "백엔드에서 LLM 후보 코드를 생성하고 C++ evaluator와 finalscore로 평가합니다.",
+        content: "백엔드에서 LLM 후보 코드를 생성하고 C++ evaluator와 finalscore로 평가합니다.",
       },
     ],
   }),
@@ -43,7 +42,27 @@ export const Route = createFileRoute("/")({
 
 type Stage = "input" | "candidates" | "scoring" | "result" | "final";
 
-type Candidate = {
+type CandidateCode = {
+  model: string;
+  code: string;
+};
+
+type EvaluationResult = {
+  rank: number;
+  fileName: string;
+  semanticScore: number;
+  passRate: number;
+  timeScore: number;
+  memoryScore: number;
+  finalScore: number;
+};
+
+type ExecutionMetric = {
+  runtimeMs: number;
+  memoryKb: number;
+};
+
+type EvaluatedCandidate = {
   id: string;
   model: string;
   color: string;
@@ -60,16 +79,20 @@ type Candidate = {
 };
 
 const LANGUAGES = ["Python", "C", "C++", "Java"];
+const MODEL_COLORS = ["oklch(0.78 0.12 250)", "oklch(0.8 0.11 35)", "oklch(0.78 0.11 160)"];
 
 function Index() {
   const [stage, setStage] = useState<Stage>("input");
   const [problem, setProblem] = useState("");
   const [language, setLanguage] = useState("C++");
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [candidates, setCandidates] = useState<CandidateCode[]>([]);
+  const [results, setResults] = useState<EvaluationResult[]>([]);
+  const [executionMetrics, setExecutionMetrics] = useState<Record<string, ExecutionMetric>>({});
   const [copied, setCopied] = useState(false);
+  const evaluatedCandidates = buildEvaluatedCandidates(candidates, results, executionMetrics);
 
-  const winner = candidates.length
-    ? [...candidates].sort((a, b) => b.total - a.total)[0]
+  const winner = evaluatedCandidates.length
+    ? [...evaluatedCandidates].sort((a, b) => b.total - a.total)[0]
     : null;
 
   const handleSubmit = async () => {
@@ -97,7 +120,7 @@ function Index() {
       const response = await fetch("http://127.0.0.1:5000/api/evaluate", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json; charset=utf-8",
         },
         body: JSON.stringify({
           problem,
@@ -111,7 +134,9 @@ function Index() {
         throw new Error(data.message || "백엔드 평가 실패");
       }
 
-      setCandidates(data.candidates);
+      setCandidates(data.candidates || []);
+      setResults(data.results || []);
+      setExecutionMetrics(data.executionMetrics || {});
       setStage("result");
       toast.success("백엔드 평가가 완료되었습니다.");
     } catch (error) {
@@ -125,6 +150,8 @@ function Index() {
     setStage("input");
     setProblem("");
     setCandidates([]);
+    setResults([]);
+    setExecutionMetrics({});
   };
 
   const copyCode = async () => {
@@ -182,6 +209,7 @@ function Index() {
         {stage === "result" && winner && (
           <ResultStage
             candidates={candidates}
+            evaluatedCandidates={evaluatedCandidates}
             onReset={reset}
             onShowFinal={() => setStage("final")}
           />
@@ -291,9 +319,7 @@ function InputStage({
 
         <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="sm:w-56">
-            <label className="mb-2 block text-sm font-semibold text-foreground">
-              언어
-            </label>
+            <label className="mb-2 block text-sm font-semibold text-foreground">언어</label>
 
             <Select value={language} onValueChange={setLanguage}>
               <SelectTrigger className="rounded-xl bg-background/60">
@@ -350,7 +376,7 @@ function CandidatesStage({
   onNext,
   onBack,
 }: {
-  candidates: Candidate[];
+  candidates: CandidateCode[];
   language: string;
   onNext: () => void;
   onBack: () => void;
@@ -383,9 +409,9 @@ function CandidatesStage({
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {candidates.map((c) => (
+        {candidates.map((c, index) => (
           <Card
-            key={c.id}
+            key={`${c.model}-${index}`}
             className="overflow-hidden rounded-2xl border-border/60"
             style={{ boxShadow: "var(--shadow-card)" }}
           >
@@ -393,11 +419,11 @@ function CandidatesStage({
               <div className="flex items-center gap-2">
                 <span
                   className="h-2.5 w-2.5 rounded-full"
-                  style={{ background: c.color }}
+                  style={{
+                    background: MODEL_COLORS[index % MODEL_COLORS.length],
+                  }}
                 />
-                <span className="text-sm font-semibold text-foreground">
-                  {c.model}
-                </span>
+                <span className="text-sm font-semibold text-foreground">{c.model}</span>
               </div>
 
               <Badge variant="secondary" className="rounded-full text-xs">
@@ -434,7 +460,7 @@ function ScoringStage() {
         <Loader2 className="h-7 w-7 animate-spin" />
       </div>
 
-      <h2 className="mt-6 text-2xl font-bold text-foreground">백엔드 평가 중</h2>
+      <h2 className="mt-6 text-2xl font-bold text-foreground">코드 생성, 평가 중</h2>
 
       <ul className="mt-4 space-y-1.5 text-center text-sm text-muted-foreground">
         {steps.map((s) => (
@@ -447,14 +473,16 @@ function ScoringStage() {
 
 function ResultStage({
   candidates,
+  evaluatedCandidates,
   onReset,
   onShowFinal,
 }: {
-  candidates: Candidate[];
+  candidates: CandidateCode[];
+  evaluatedCandidates: EvaluatedCandidate[];
   onReset: () => void;
   onShowFinal: () => void;
 }) {
-  const sorted = [...candidates].sort((a, b) => b.total - a.total);
+  const sorted = [...evaluatedCandidates].sort((a, b) => b.total - a.total);
 
   return (
     <div className="pt-4">
@@ -468,8 +496,7 @@ function ResultStage({
 
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onReset} className="rounded-xl">
-            <RotateCcw className="mr-1 h-4 w-4" />
-            새 문제
+            <RotateCcw className="mr-1 h-4 w-4" />새 문제
           </Button>
 
           <Button
@@ -483,58 +510,95 @@ function ResultStage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {sorted.map((c, i) => (
-          <Card
-            key={c.id}
-            className={`rounded-2xl p-5 transition ${
-              i === 0
-                ? "border-primary/40 ring-2 ring-primary/20"
-                : "border-border/60"
-            }`}
-            style={{
-              boxShadow: i === 0 ? "var(--shadow-soft)" : "var(--shadow-card)",
-            }}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ background: c.color }}
-                />
+      {candidates.length > 0 && (
+        <section className="mb-8">
+          <div className="mb-3">
+            <h2 className="text-xl font-extrabold text-foreground">Candidate Codes</h2>
+            <p className="text-sm font-medium text-muted-foreground">
+              평가를 통과한 후보 코드입니다.
+            </p>
+          </div>
 
-                <span className="font-bold text-foreground">{c.model}</span>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {candidates.map((candidate, index) => (
+              <Card
+                key={`${candidate.model}-${index}`}
+                className="overflow-hidden rounded-2xl border-border/60"
+                style={{ boxShadow: "var(--shadow-card)" }}
+              >
+                <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{
+                      background: MODEL_COLORS[index % MODEL_COLORS.length],
+                    }}
+                  />
+                  <h3 className="text-sm font-semibold text-foreground">{candidate.model}</h3>
+                </div>
 
-                {i === 0 && (
-                  <Badge
-                    className="rounded-full text-primary-foreground font-semibold"
-                    style={{ background: "var(--gradient-primary)" }}
-                  >
-                    <Trophy className="mr-1 h-3 w-3" />
-                    BEST
-                  </Badge>
-                )}
+                <pre className="max-h-72 overflow-auto bg-muted/40 p-4 text-xs leading-relaxed text-foreground">
+                  <code>{candidate.code}</code>
+                </pre>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="mb-3">
+          <h2 className="text-xl font-extrabold text-foreground">Evaluation Results</h2>
+          <p className="text-sm font-medium text-muted-foreground">
+            C++ 실행 평가와 finalscore 계산 결과입니다.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {sorted.map((c, i) => (
+            <Card
+              key={c.id}
+              className={`rounded-2xl p-5 transition ${
+                i === 0 ? "border-primary/40 ring-2 ring-primary/20" : "border-border/60"
+              }`}
+              style={{
+                boxShadow: i === 0 ? "var(--shadow-soft)" : "var(--shadow-card)",
+              }}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: c.color }} />
+
+                  <span className="font-bold text-foreground">{c.model}</span>
+
+                  {i === 0 && (
+                    <Badge
+                      className="rounded-full text-primary-foreground font-semibold"
+                      style={{ background: "var(--gradient-primary)" }}
+                    >
+                      <Trophy className="mr-1 h-3 w-3" />
+                      BEST
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="text-right">
+                  <div className="text-2xl font-extrabold text-foreground">{c.total}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Score
+                  </div>
+                </div>
               </div>
 
-              <div className="text-right">
-                <div className="text-2xl font-extrabold text-foreground">
-                  {c.total}
-                </div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Score
-                </div>
+              <div className="space-y-2.5">
+                <ScoreBar label="정확성" value={c.scores.correctness} />
+                <ScoreBar label="성능 (C++ 측정)" value={c.scores.performance} />
+                <ScoreBar label="메모리" value={c.scores.crossReview} />
+                <ScoreBar label="의미 유사도" value={c.scores.style} />
               </div>
-            </div>
-
-            <div className="space-y-2.5">
-              <ScoreBar label="정확성" value={c.scores.correctness} />
-              <ScoreBar label="성능 (C++ 측정)" value={c.scores.performance} />
-              <ScoreBar label="메모리" value={c.scores.crossReview} />
-              <ScoreBar label="의미 유사도" value={c.scores.style} />
-            </div>
-          </Card>
-        ))}
-      </div>
+            </Card>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -547,7 +611,7 @@ function FinalStage({
   onCopy,
   copied,
 }: {
-  winner: Candidate;
+  winner: EvaluatedCandidate;
   language: string;
   onBack: () => void;
   onReset: () => void;
@@ -558,9 +622,7 @@ function FinalStage({
     <div className="pt-4">
       <div className="mb-6 flex items-end justify-between">
         <div>
-          <h2 className="text-2xl font-extrabold text-foreground">
-            최선 후보 코드
-          </h2>
+          <h2 className="text-2xl font-extrabold text-foreground">최선 후보 코드</h2>
           <p className="text-sm font-medium text-muted-foreground">
             교차 검증 및 성능 측정을 거쳐 최적의 코드입니다.
           </p>
@@ -572,8 +634,7 @@ function FinalStage({
           </Button>
 
           <Button variant="ghost" onClick={onReset} className="rounded-xl">
-            <RotateCcw className="mr-1 h-4 w-4" />
-            새 문제
+            <RotateCcw className="mr-1 h-4 w-4" />새 문제
           </Button>
         </div>
       </div>
@@ -592,9 +653,7 @@ function FinalStage({
             </div>
 
             <div>
-              <div className="text-sm font-bold text-foreground">
-                {winner.model}
-              </div>
+              <div className="text-sm font-bold text-foreground">{winner.model}</div>
               <div className="text-xs font-medium text-muted-foreground">
                 {language} · 최종 점수 {winner.total}
               </div>
@@ -603,11 +662,7 @@ function FinalStage({
 
           <div className="flex flex-wrap items-center gap-3">
             <Metric icon={Timer} label="실행 시간" value={`${winner.runtimeMs} ms`} />
-            <Metric
-              icon={MemoryStick}
-              label="메모리"
-              value={`${winner.memoryKb} KB`}
-            />
+            <Metric icon={MemoryStick} label="메모리" value={`${winner.memoryKb} KB`} />
 
             <Button
               onClick={onCopy}
@@ -633,6 +688,50 @@ function FinalStage({
       </Card>
     </div>
   );
+}
+
+function buildEvaluatedCandidates(
+  candidates: CandidateCode[],
+  results: EvaluationResult[],
+  executionMetrics: Record<string, ExecutionMetric>,
+): EvaluatedCandidate[] {
+  const resultByFileName = new Map(results.map((result) => [result.fileName, result]));
+
+  return candidates.map((candidate, index) => {
+    const fileName = makeCandidateFileName(candidate.model, index + 1);
+    const result = resultByFileName.get(fileName) || results[index];
+    const metrics = executionMetrics[fileName] || {
+      runtimeMs: 0,
+      memoryKb: 0,
+    };
+
+    return {
+      id: `${candidate.model}-${index}`,
+      model: candidate.model,
+      color: MODEL_COLORS[index % MODEL_COLORS.length],
+      code: candidate.code,
+      scores: {
+        correctness: normalizeScore(result?.passRate),
+        style: normalizeScore(result?.semanticScore),
+        performance: normalizeScore(result?.timeScore),
+        crossReview: normalizeScore(result?.memoryScore),
+      },
+      total: normalizeScore(result?.finalScore),
+      runtimeMs: metrics.runtimeMs,
+      memoryKb: metrics.memoryKb,
+    };
+  });
+}
+
+function makeCandidateFileName(model: string, index: number) {
+  const safeModelName = model.trim().replace(/[\s/\\:*?"<>|]/g, "_");
+  return `code_${safeModelName || `model_${index}`}.cpp`;
+}
+
+function normalizeScore(value?: number) {
+  const parsed = Number(value || 0);
+  const normalized = parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
+  return Number(normalized.toFixed(1));
 }
 
 function ScoreBar({ label, value }: { label: string; value: number }) {
@@ -661,9 +760,7 @@ function Metric({
     <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2">
       <Icon className="h-4 w-4 text-primary" />
       <div className="leading-tight">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          {label}
-        </div>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
         <div className="text-sm font-semibold text-foreground">{value}</div>
       </div>
     </div>
