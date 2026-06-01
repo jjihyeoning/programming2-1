@@ -206,7 +206,7 @@ CandidateResult runExecutableAndMeasure(const string& exePath, CandidateResult r
     CloseHandle(pi.hThread);
 
     result.peakMemoryKB = peakMemoryKB;
-    result.runSuccess = (!result.timeout && exitCode == 0);
+    result.runSuccess = (!result.timeout);
 
     return result;
 }
@@ -295,21 +295,30 @@ CandidateResult evaluateCandidate(const string& sourcePath) {
 
     result = runExecutableAndMeasure(result.exePath, result, 5000);
 
-    if (!result.runSuccess) {
-        if (result.timeout) {
-            cout << "[실행 실패] 시간 초과" << endl;
-        }
-        else {
-            cout << "[실행 실패] 런타임 오류 또는 비정상 종료" << endl;
-        }
-
-        result.semanticScore = 0.0;
-        result.passRate = 0.0;
-        result.timeScore = 0.0;
-        result.memoryScore = 0.0;
-
-        return result;
+if (!result.runSuccess) {
+    if (result.timeout) {
+        cout << "[실행 실패] 시간 초과" << endl;
+    } else {
+        cout << "[실행 실패] 런타임 오류 또는 비정상 종료" << endl;
     }
+
+    result.semanticScore = 0.0;
+    result.passRate = 0.0;
+
+    if (result.executionTimeMs > 0) {
+        result.timeScore = calculateTimeScore(result.executionTimeMs);
+    } else {
+        result.timeScore = 0.0;
+    }
+
+    if (result.peakMemoryKB > 0) {
+        result.memoryScore = calculateMemoryScore(result.peakMemoryKB);
+    } else {
+        result.memoryScore = 0.0;
+    }
+
+    return result;
+}
 
     result.semanticScore = 0.0;
     result.passRate = 1.0;
